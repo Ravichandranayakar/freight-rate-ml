@@ -1,0 +1,15 @@
+freight-rate-ml-assessment.pdf.url
+readme.md
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Assessment input data
+data/*.csv
+
+# Temporary scoring outputs
+scorer_results/
