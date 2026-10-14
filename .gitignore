@@ -10,4 +10,5 @@ __pycache__/
 # Assessment input data 
 data/*.csv
 !data/december-chart-inputs.csv
-readme.md
+
+generate_report.py
