@@ -1,6 +1,13 @@
 # US Freight Rate Prediction Engine
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Spaces-blue)](https://huggingface.co/spaces/RavichandraNayakar/Freight-Rate-Prediction)
+[![Model](https://img.shields.io/badge/Model-LightGBM%20(L1%20Loss)-teal)](https://github.com/Ravichandranayakar/freight-rate-ml)
+[![Holdout MAE](https://img.shields.io/badge/MAE-$114.36-brightgreen)](https://github.com/Ravichandranayakar/freight-rate-ml)
+
+> **Live Interactive Application:** [https://huggingface.co/spaces/RavichandraNayakar/Freight-Rate-Prediction](https://huggingface.co/spaces/RavichandraNayakar/Freight-Rate-Prediction)
+
 An end-to-end machine learning system for predicting commercial spot freight shipping rates across US logistics lanes. The project focuses on data hygiene, domain-driven feature engineering, chronological validation, and LightGBM regression to accurately estimate posted shipment rates for unseen loads.
+
 
 ---
 
