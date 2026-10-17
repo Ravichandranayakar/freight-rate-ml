@@ -2,175 +2,192 @@ import gradio as gr
 import pandas as pd
 import numpy as np
 import joblib
+import math
+from datetime import datetime
 
-# Load model 
+try:
+    import spaces
+except ImportError:
+    class spaces:
+        @staticmethod
+        def GPU(func):
+            return func
+
+# ---------------------------------------------------------
+# Load Model
+# ---------------------------------------------------------
 try:
     model = joblib.load("freight_rate_model.joblib")
-    model_status = " Model loaded successfully"
-except Exception as e:
+except Exception:
     model = None
-    model_status = f" Warning: Could not load model ({e})"
 
-# Inference Logic & Feature Engineering
-DOW_MAP = {
-    "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
-    "Friday": 4, "Saturday": 5, "Sunday": 6
+# ---------------------------------------------------------
+# City Coordinates Database (Top US Freight Hubs)
+# ---------------------------------------------------------
+US_CITIES = {
+    "Atlanta, GA": (33.7490, -84.3880),
+    "Chicago, IL": (41.8781, -87.6298),
+    "Dallas, TX": (32.7767, -96.7970),
+    "Houston, TX": (29.7604, -95.3698),
+    "Los Angeles, CA": (34.0522, -118.2437),
+    "New York, NY": (40.7128, -74.0060),
+    "Philadelphia, PA": (39.9526, -75.1652),
+    "Seattle, WA": (47.6062, -122.3321),
+    "Miami, FL": (25.7617, -80.1918),
+    "Denver, CO": (39.7392, -104.9903),
+    "Kansas City, MO": (39.0997, -94.5786),
+    "Memphis, TN": (35.1495, -90.0490),
+    "Phoenix, AZ": (33.4484, -112.0740),
+    "Indianapolis, IN": (39.7684, -86.1581)
 }
 
-def predict_freight_rate(
-    distance,
-    cargo_weight,
-    equipment_type,
-    origin_lat,
-    origin_lng,
-    dest_lat,
-    dest_lng,
-    market_index,
-    month,
-    day_of_week
-):
+MARKET_PRESETS = {
+    "Normal Demand (Standard Rates)": 1.0,
+    "Tight Capacity / Peak Season (Surge)": 1.35,
+    "Soft Market / Low Demand (Discounted)": 0.85
+}
+
+def haversine_miles(lat1, lon1, lat2, lon2):
+    r = 3958.8
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    return max(40, round(r * c * 1.18))
+
+def update_lane_distance(origin, dest):
+    c1 = US_CITIES.get(origin, (33.7490, -84.3880))
+    c2 = US_CITIES.get(dest, (41.8781, -87.6298))
+    return haversine_miles(c1[0], c1[1], c2[0], c2[1])
+
+# ---------------------------------------------------------
+# Prediction Function 
+# ---------------------------------------------------------
+@spaces.GPU
+def predict_freight(origin_city, dest_city, equipment, weight, market_desc, custom_dist):
     if model is None:
-        return (
-            "Model file 'freight_rate_model.joblib' not found. Please ensure the model artifact is saved.",
-            "$0.00 / mi",
-            "Model Offline"
-        )
+        return "Model not loaded. Ensure freight_rate_model.joblib is present.", "N/A", "Offline"
 
-    # 1. Feature Engineering
-    dow_num = DOW_MAP.get(day_of_week, 2)
-    is_short_haul = 1 if distance < 150 else 0
-    est_cost = distance * (cargo_weight / 1000.0) * 0.05
-    market_pressure = market_index * 1.15
+    # Coordinates
+    orig_lat, orig_lng = US_CITIES.get(origin_city, (33.7490, -84.3880))
+    dest_lat, dest_lng = US_CITIES.get(dest_city, (41.8781, -87.6298))
 
-    # 2. Building inference dataframe with exact column schema 
+    distance = custom_dist if custom_dist > 0 else haversine_miles(orig_lat, orig_lng, dest_lat, dest_lng)
+    market_index = MARKET_PRESETS.get(market_desc, 1.0)
+    quote_signal = 2.06
+
+    # Feature Engineering formulas 
+    est_cost = distance * quote_signal
+    market_presssure = market_index * quote_signal
+    is_short_haul = 1 if distance < 250 else 0
+
+    # Dummy variables (To match  pd.get_dummies drop_first=True)
+    eq_flatbed = 1 if equipment == "Flatbed" else 0
+    eq_reefer = 1 if equipment == "Reefer" else 0
+
+    now = datetime.now()
+    month = now.month
+    day_of_week = now.weekday()
+
+    # Exact 15 features matching model.booster_.feature_name() in order
     input_df = pd.DataFrame([{
+        'pickup_lat': float(orig_lat),
+        'pickup_lon': float(orig_lng),
+        'delivery_lat': float(dest_lat),
+        'delivery_lon': float(dest_lng),
         'distance': float(distance),
-        'cargo_weight': float(cargo_weight),
-        'equipment_type': str(equipment_type),
-        'origin_lat': float(origin_lat),
-        'origin_lng': float(origin_lng),
-        'dest_lat': float(dest_lat),
-        'dest_lng': float(dest_lng),
+        'weight': float(weight),
         'market_index': float(market_index),
+        'quote_signal': float(quote_signal),
         'month': int(month),
-        'day_of_week': int(dow_num),
-        'is_short_haul': int(is_short_haul),
+        'day_of_week': int(day_of_week),
         'est_cost': float(est_cost),
-        'market_pressure': float(market_pressure)
+        'market_presssure': float(market_presssure),
+        'is_short_haul': int(is_short_haul),
+        'equipment_Flatbed': int(eq_flatbed),
+        'equipment_Reefer': int(eq_reefer)
     }])
 
-    # 3. Predict
-    try:
-        pred_rate = float(model.predict(input_df)[0])
-        pred_rate = max(0.0, pred_rate)
-        per_mile = pred_rate / max(distance, 1.0)
+    pred_rate = float(model.predict(input_df)[0])
+    pred_rate = max(0.0, pred_rate)
+    rpm = pred_rate / max(distance, 1.0)
 
-        rate_display = f"${pred_rate:,.2f}"
-        rpm_display = f"${per_mile:.2f} / mile"
-        summary = (
-            f"**Lane:** ({origin_lat:.2f}, {origin_lng:.2f}) ➔ ({dest_lat:.2f}, {dest_lng:.2f})\n\n"
-            f"- **Distance:** {distance:,} miles\n"
-            f"- **Equipment:** {equipment_type}\n"
-            f"- **Cargo Weight:** {cargo_weight:,} lbs\n"
-            f"- **Estimated Base Cost Proxy:** ${est_cost:,.2f}\n"
-            f"- **Model Validation Accuracy:** MAE $114.36 (Tuned LightGBM L1)"
-        )
+    rate_text = f"${pred_rate:,.2f}"
+    rpm_text = f"${rpm:.2f} / mi"
 
-        return rate_display, rpm_display, summary
+    details = f"""
+    ### Lane Breakdown:
+    * **Route:** {origin_city} -> {dest_city} ({distance:,} miles)
+    * **Equipment:** {equipment} | **Weight:** {weight:,} lbs
+    * **Market Condition:** {market_desc}
+    * **Estimated Base Cost:** ${est_cost:,.2f}
+    * **Model Architecture:** LightGBM L1 Regression (Holdout MAE: $114.36)
+    """
 
-    except Exception as err:
-        return f"Error during prediction: {err}", "N/A", "Error"
+    return rate_text, rpm_text, details
 
-# Modern Gradio UI
+# ---------------------------------------------------------
+# Gradio UI
+# ---------------------------------------------------------
+city_list = list(US_CITIES.keys())
 
-theme = gr.themes.Soft(
-    primary_hue="teal",
-    neutral_hue="slate"
-)
-
-with gr.Blocks(theme=theme, title="US Freight Rate Prediction Engine") as demo:
+with gr.Blocks(title="US Freight Rate Prediction Engine") as demo:
     gr.Markdown(
         """
-        #  US Freight Rate Prediction Engine
-        Predict commercial spot market shipping rates across US logistics lanes using an optimized **LightGBM** regressor (MAE: $114.36).
+        # US Freight Rate Estimator
+        Predict commercial truckload spot rates across major US shipping lanes using an optimized LightGBM regressor.
         """
     )
-    
+
     with gr.Row():
-        # Column 1: Shipment Characteristics
         with gr.Column(scale=1):
-            gr.Markdown("###  Shipment Characteristics")
-            distance = gr.Slider(
-                label="Trip Distance (miles)", minimum=10, maximum=3000, value=715, step=5
-            )
-            cargo_weight = gr.Number(
-                label="Cargo Weight (lbs)", value=34500, minimum=500, maximum=50000, step=500
-            )
-            equipment_type = gr.Dropdown(
-                label="Equipment Type", choices=["Dry Van", "Reefer", "Flatbed"], value="Dry Van"
+            gr.Markdown("### Select Origin & Destination")
+            with gr.Row():
+                origin_city = gr.Dropdown(label="Origin Hub", choices=city_list, value="Atlanta, GA")
+                dest_city = gr.Dropdown(label="Destination Hub", choices=city_list, value="Chicago, IL")
+
+            gr.Markdown("### Load Specifications")
+            equipment = gr.Radio(label="Trailer Equipment", choices=["Dry Van", "Reefer", "Flatbed"], value="Dry Van")
+            weight = gr.Slider(label="Cargo Weight (lbs)", minimum=1000, maximum=48000, value=34000, step=1000)
+            market_desc = gr.Dropdown(
+                label="Market Capacity Condition",
+                choices=list(MARKET_PRESETS.keys()),
+                value="Normal Demand (Standard Rates)"
             )
 
-            gr.Markdown("###  Lane Coordinates")
-            with gr.Row():
-                origin_lat = gr.Number(label="Origin Lat", value=33.7490)
-                origin_lng = gr.Number(label="Origin Lng", value=-84.3880)
-            with gr.Row():
-                dest_lat = gr.Number(label="Dest Lat", value=41.8781)
-                dest_lng = gr.Number(label="Dest Lng", value=-87.6298)
+            distance = gr.Slider(label="Estimated Highway Distance (miles)", minimum=40, maximum=3000, value=715, step=5)
 
-        # Column 2: Market Signals & Results
+            origin_city.change(fn=update_lane_distance, inputs=[origin_city, dest_city], outputs=distance)
+            dest_city.change(fn=update_lane_distance, inputs=[origin_city, dest_city], outputs=distance)
+
+            predict_btn = gr.Button("Calculate Rate", variant="primary", size="lg")
+
         with gr.Column(scale=1):
-            gr.Markdown("###  Market & Calendar Signals")
-            market_index = gr.Slider(
-                label="Market Pressure Index", minimum=0.0, maximum=5.0, value=1.2, step=0.05
-            )
+            gr.Markdown("### Rate Prediction")
             with gr.Row():
-                month = gr.Dropdown(
-                    label="Shipment Month", choices=list(range(1, 13)), value=10
-                )
-                day_of_week = gr.Dropdown(
-                    label="Day of Week",
-                    choices=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-                    value="Wednesday"
-                )
+                out_rate = gr.Textbox(label="Estimated Posted Rate", elem_id="rate-box")
+                out_rpm = gr.Textbox(label="Rate Per Mile (RPM)")
 
-            predict_btn = gr.Button(" Predict Freight Rate", variant="primary", size="lg")
+            out_details = gr.Markdown()
 
-            gr.Markdown("###  Prediction Output")
-            with gr.Row():
-                out_rate = gr.Textbox(label="Estimated Posted Rate (USD)", elem_id="rate_box")
-                out_rpm = gr.Textbox(label="Rate Per Mile")
-            
-            out_summary = gr.Markdown(label="Shipment Summary")
-
-    # 1-Click Example Presets for recruiters/viewers
-    gr.Markdown("###  Click an Example to Pre-fill and Test")
+    gr.Markdown("### Quick Examples (Click to Test)")
     gr.Examples(
         examples=[
-            [715, 34500, "Dry Van", 33.7490, -84.3880, 41.8781, -87.6298, 1.20, 10, "Wednesday"],   # Atlanta -> Chicago
-            [240, 42000, "Flatbed", 29.7604, -95.3698, 32.7767, -96.7970, 0.95, 8, "Tuesday"],      # Houston -> Dallas
-            [1130, 28000, "Reefer", 34.0522, -118.2437, 47.6062, -122.3321, 1.85, 11, "Friday"],   # LA -> Seattle
-            [95, 15000, "Dry Van", 40.7128, -74.0060, 39.9526, -75.1652, 1.10, 5, "Monday"],       # NYC -> Philly (Short haul)
+            ["Atlanta, GA", "Chicago, IL", "Dry Van", 34000, "Normal Demand (Standard Rates)", 715],
+            ["Houston, TX", "Dallas, TX", "Flatbed", 42000, "Normal Demand (Standard Rates)", 240],
+            ["Los Angeles, CA", "Seattle, WA", "Reefer", 28000, "Tight Capacity / Peak Season (Surge)", 1135],
+            ["New York, NY", "Philadelphia, PA", "Dry Van", 15000, "Normal Demand (Standard Rates)", 95]
         ],
-        inputs=[
-            distance, cargo_weight, equipment_type,
-            origin_lat, origin_lng, dest_lat, dest_lng,
-            market_index, month, day_of_week
-        ],
-        outputs=[out_rate, out_rpm, out_summary],
-        fn=predict_freight_rate,
+        inputs=[origin_city, dest_city, equipment, weight, market_desc, distance],
+        outputs=[out_rate, out_rpm, out_details],
+        fn=predict_freight,
         cache_examples=False
     )
 
     predict_btn.click(
-        fn=predict_freight_rate,
-        inputs=[
-            distance, cargo_weight, equipment_type,
-            origin_lat, origin_lng, dest_lat, dest_lng,
-            market_index, month, day_of_week
-        ],
-        outputs=[out_rate, out_rpm, out_summary]
+        fn=predict_freight,
+        inputs=[origin_city, dest_city, equipment, weight, market_desc, distance],
+        outputs=[out_rate, out_rpm, out_details]
     )
 
-if __name__ == "__main__":
-    demo.launch()
+demo.launch(ssr_mode=False)
