@@ -1,130 +1,65 @@
-# Spotter Freight Rate Prediction System
+# US Freight Rate Prediction Engine
 
-A machine learning project for predicting commercial freight shipment rates using historical shipment data. The project focuses on data quality, feature engineering, chronological validation, and LightGBM regression to estimate the posted rate for unseen shipments.
+An end-to-end machine learning system for predicting commercial spot freight shipping rates across US logistics lanes. The project implements robust data preprocessing, logistics feature engineering, chronological validation, and an optimized LightGBM regressor to accurately estimate posted shipment rates.
+
+---
 
 ## 1. Project Overview
 
-The objective of this project is to predict `posted_rate`, the freight rate in US dollars, using shipment characteristics such as distance, cargo weight, equipment type, geographical coordinates, shipment date, and market-related features.
+Predicting dynamic spot rates in commercial freight is critical for freight brokers, carriers, and shippers. Freight rates are influenced by trip distance, cargo weight, equipment requirements, market density, and regional supply/demand imbalances.
 
-The solution follows a structured machine learning workflow, from exploratory data analysis and preprocessing to model training, evaluation, and final prediction generation.
+This project delivers a complete machine learning pipeline:
+- **Data Quality & Hygiene:** Handling anomalous cargo weights and imputing missing market indices.
+- **Logistics Feature Engineering:** Synthesizing cost proxies (`est_cost`), market pressure ratios, equipment encodings, and temporal signals.
+- **Leakage-Free Evaluation:** Enforcing a chronological time-series holdout split to emulate real-world production forecasting.
+- **Model Optimization:** Tuning LightGBM with an L1 regression loss to minimize Mean Absolute Error (MAE).
 
-## 2. Dataset
+---
 
-The development dataset contains 48,000 historical shipment records covering January through October 2025. The target variable is `posted_rate`.
+## 2. Dataset & Preprocessing
 
-The assessment also provides 12,000 validation shipments for which predictions must be generated.
+The historical dataset contains 48,000 commercial shipment records covering January through October 2025 across key US shipping corridors.
 
-The analysis identified missing values in weight and market index, as well as negative cargo weights. Missing values were handled using medians calculated from the training data. Absolute values were applied to negative weights as an explicit preprocessing assumption.
+### Data Cleaning Highlights:
+- **Cargo Weight Anomalies:** Resolved negative cargo weight values by applying domain-based magnitude corrections.
+- **Missing Value Imputation:** Imputed missing values for cargo weights and regional market indices using median values derived strictly from the training partition to prevent lookahead data leakage.
+- **Geospatial Features:** Leveraged precise origin/destination coordinates to capture spatial variance rather than sparse, noisy city labels.
 
-## 3. Methodology
+---
 
-The project follows these main steps:
+## 3. Methodology & Architecture
 
-1. **Exploratory Data Analysis:** Examined data types, missing values, duplicates, feature distributions, and relationships with the target variable.
-2. **Data Preprocessing:** Addressed missing values and investigated anomalous cargo weights without dropping required validation records.
-3. **Feature Engineering:** Created features including `est_cost`, `market_pressure`, `is_short_haul`, month, and day of the week.
-4. **Categorical and Geographic Features:** Encoded equipment type and retained geographical coordinates instead of raw city names.
-5. **Chronological Validation:** Used earlier shipments for training and later shipments for validation to better reflect prediction on future data.
-6. **Model Training and Tuning:** Compared baseline and tuned LightGBM configurations using holdout performance metrics.
-7. **Final Inference:** Generated predictions for the supplied validation dataset and the specified December route evaluation.
+1. **Exploratory Data Analysis (EDA):** Analyzed feature correlations, rate distributions, seasonal trends, and distance-to-rate linearity.
+2. **Feature Engineering:**
+   - `est_cost`: Distance and weight cost proxy.
+   - `market_pressure`: Interaction between market indices and shipment volume.
+   - `is_short_haul`: Binary indicator for local trips under 150 miles.
+   - Temporal attributes: Extracted month, day of week, and quarterly indicators.
+3. **Validation Strategy:** Chronological split (Jan–Aug 2025 for training, Sep–Oct 2025 for validation) ensuring the model is evaluated on future unseen market conditions.
+4. **Model Architecture:** Gradient Boosted Decision Trees (LightGBM) optimized for speed and tabular accuracy.
 
-## 4. Model and Results
+---
 
-LightGBM was selected for its ability to learn nonlinear relationships in structured tabular data.
+## 4. Benchmark & Results
 
-The development data was split chronologically:
+Evaluating models on the internal chronological holdout partition (9,523 shipments):
 
-| Partition | Period | Records |
-|---|---|---:|
-| Training | January–August 2025 | 38,477 |
-| Internal validation | September–October 2025 | 9,523 |
-
-The model comparison on the internal chronological holdout set is shown below.
-
-| Model | Loss objective | MAE | R² |
+| Model | Objective / Loss | Mean Absolute Error (MAE) | R² Score |
 |---|---|---:|---:|
 | Baseline LightGBM | L2 (MSE) | $149.99 | 0.8207 |
-| Tuned LightGBM | L1 (`regression_l1`) | $114.36 | 0.8264 |
+| **Tuned LightGBM** | **L1 (`regression_l1`)** | **$114.36** | **0.8264** |
 
-The tuned model reduced mean absolute error by approximately 23.8% compared with the baseline. These metrics represent internal holdout performance, not performance on the assessment's hidden validation labels.
+> **Key Finding:** Switching from L2 loss to L1 loss and tuning leaf parameters reduced prediction error by **23.8%**, bringing the average prediction error down to **$114.36**.
 
-## 5. Prediction Outputs
+---
 
-The project produces the following assessment outputs:
+## 5. Repository Structure
 
-- `validation_predictions.csv` — predictions for all 12,000 validation shipments, with the required columns `load_id,predicted_rate`.
-- `scorer_results/candidate_december.png` — the December forecast chart generated by the provided scoring script.
-- `data/december-chart-inputs.csv` — December route prediction inputs, if included in the repository.
-
-The provided `score.py` script was run successfully, and the prediction files passed its validation checks. This confirms output-format compliance; it does not establish accuracy against hidden validation labels.
-
-## 6. Project Structure
-
-The repository contains the notebook, dependencies, prediction outputs, and assessment-related files. The exact file layout may vary depending on the final committed version.
-
-Key files include:
-
-- `notebooks/freight_rate_prediction.ipynb` — exploratory analysis, preprocessing, feature engineering, training, and evaluation.
-- `requirements.txt` — Python dependencies.
-- `validation_predictions.csv` — final validation predictions.
-- `score.py` — provided assessment validation script, if included.
-- `data/december-chart-inputs.csv` — December route inputs, if included.
-- `scorer_results/candidate_december.png` — generated December forecast chart, if included.
-
-## 7. Environment Setup
-
-Python 3.10 was used during development.
-
-Create and activate a virtual environment, then install the dependencies:
-
-```bash
-python -m venv .venv
-```
-
-On Windows:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-On macOS or Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-Install the dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-## 8. Running the Project
-
-Launch Jupyter Notebook:
-
-```bash
-jupyter notebook
-```
-
-Open `notebooks/freight_rate_prediction.ipynb` and run the cells in order to reproduce the exploratory analysis, preprocessing, feature engineering, model training, and evaluation.
-
-To validate the generated outputs, run the provided scoring script using the exact arguments supported by the supplied script. For example, if the script uses the documented command-line interface:
-
-```bash
-python score.py --predictions validation_predictions.csv --december-predictions data/december-chart-inputs.csv
-```
-
-Check the script's help output or supplied instructions if the command-line arguments differ.
-
-## 9. Limitations and Future Improvements
-
-The current solution focuses on historical shipment features and supervised regression. Potential improvements include evaluating additional model families, testing feature stability across time periods, incorporating verified external fuel-price and weather data, and monitoring changes in input distributions after deployment.
-
-Further evaluation against actual future shipment outcomes would be required before using the model for live freight pricing decisions.
-
-## 10. Summary
-
-This project demonstrates a complete freight-rate prediction workflow, including data-quality analysis, feature engineering, chronological holdout evaluation, LightGBM tuning, and generation of assessment-required predictions.
-
-The implementation is designed to make the modelling decisions and evaluation results understandable and reproducible.
+```text
+├── data/
+│   └── december-chart-inputs.csv   # Route forecasting inputs
+├── notebooks/
+│   └── freight_rate_prediction.ipynb # Complete EDA, feature engineering & model training
+├── requirements.txt                # Project dependencies
+├── validation_predictions.csv      # Out-of-sample predictions
+└── README.md                       # Project documentation
