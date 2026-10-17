@@ -1,4 +1,4 @@
-# Spotter Freight Rate Prediction System
+# Freight Rate Prediction System
 
 A machine learning project for predicting commercial freight shipment rates using historical shipment data. The project focuses on data quality, feature engineering, chronological validation, and LightGBM regression to estimate the posted rate for unseen shipments.
 
